@@ -8,6 +8,25 @@ from embed_regularize import embedded_dropout
 from locked_dropout import LockedDropout
 from weight_drop import WeightDrop
 
+class SurrogateNet(nn.Module):
+    def __init__(self, nhidlast):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(nhidlast, 800),
+            nn.ELU(),
+            nn.Dropout(0.3),
+            nn.Linear(800, 800),
+            nn.ELU(),
+            nn.Dropout(0.3),
+            nn.Linear(800, nhidlast),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        h = self.net(x)
+        # print(h)
+        return x * h
+
 class RNNModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
@@ -24,6 +43,7 @@ class RNNModel(nn.Module):
         self.rnns = torch.nn.ModuleList(self.rnns)
 
         self.prior = nn.Linear(nhidlast, n_experts, bias=False)
+        self.surrogate_net = SurrogateNet(nhidlast)
         self.latent = nn.Sequential(nn.Linear(nhidlast, n_experts*ninp), nn.Tanh())
         self.decoder = nn.Linear(ninp, ntoken)
 
@@ -90,6 +110,7 @@ class RNNModel(nn.Module):
         hidden = new_hidden
 
         output = self.lockdrop(raw_output, self.dropout)
+        output = self.surrogate_net(output)
         outputs.append(output)
 
         latent = self.latent(output)
