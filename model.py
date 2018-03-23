@@ -19,13 +19,12 @@ class SurrogateNet(nn.Module):
             nn.ELU(),
             nn.Dropout(0.3),
             nn.Linear(800, nhidlast),
-            nn.Sigmoid()
+            nn.Tanh()
         )
 
     def forward(self, x):
         h = self.net(x)
-        # print(h)
-        return x * h
+        return x + h
 
 class RNNModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
@@ -43,7 +42,7 @@ class RNNModel(nn.Module):
         self.rnns = torch.nn.ModuleList(self.rnns)
 
         self.prior = nn.Linear(nhidlast, n_experts, bias=False)
-        self.surrogate_net = SurrogateNet(nhidlast)
+        # self.surrogate_net = SurrogateNet(nhidlast)
         self.latent = nn.Sequential(nn.Linear(nhidlast, n_experts*ninp), nn.Tanh())
         self.decoder = nn.Linear(ninp, ntoken)
 
@@ -85,7 +84,7 @@ class RNNModel(nn.Module):
         self.decoder.bias.data.fill_(0)
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
-    def forward(self, input, hidden, return_h=False, return_prob=False):
+    def forward(self, input, hidden, return_h=False, return_prob=False, detach=False):
         batch_size = input.size(1)
 
         emb = embedded_dropout(self.encoder, input, dropout=self.dropoute if self.training else 0)
@@ -110,8 +109,11 @@ class RNNModel(nn.Module):
         hidden = new_hidden
 
         output = self.lockdrop(raw_output, self.dropout)
-        output = self.surrogate_net(output)
+        # output = self.surrogate_net(output)
+
         outputs.append(output)
+        if detach:
+            output = output.detach()
 
         latent = self.latent(output)
         latent = self.lockdrop(latent, self.dropoutl)

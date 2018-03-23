@@ -90,7 +90,7 @@ def gradstat():
     hidden = model.init_hidden(args.batch_size)
     batch, i = 0, 0
 
-    for param in model.parameters():
+    for param in dyneval_params:
         param.MS = 0*param.data
 
     while i < train_data.size(0) - 1 - 1:
@@ -102,13 +102,16 @@ def gradstat():
         model.zero_grad()
 
         #assumes model has atleast 2 returns, and first is output and second is hidden
-        log_prob, hidden = model(data, hidden)
+        log_prob, hidden = model(data, hidden, detach=False)
         loss = nn.functional.nll_loss(log_prob.view(-1, log_prob.size(2)), targets)
 
         loss.backward()
 
-        for param in model.parameters():
-            param.MS = param.MS + param.grad.data*param.grad.data
+        for param in dyneval_params:
+            try:
+                param.MS = param.MS + param.grad.data*param.grad.data
+            except AttributeError:
+                pass
 
         total_loss += loss.data
 
@@ -121,14 +124,14 @@ def gradstat():
                 break
     gsum = 0
 
-    for param in model.parameters():
+    for param in dyneval_params:
         if args.ms:
             param.MS = torch.sqrt(param.MS/batch)
         else:
             param.MS = torch.sqrt(param.MS)
         gsum+=torch.mean(param.MS)
 
-    for param in model.parameters():
+    for param in dyneval_params:
         param.decrate = param.MS/gsum
 
 def evaluate():
@@ -136,19 +139,22 @@ def evaluate():
     #clips decay rates at 1/lamb
     #otherwise scaled decay rates can be greater than 1
     #would cause decay updates to overshoot
-    for param in model.parameters():
-        if args.cuda:
-            decratenp = param.decrate.cpu().numpy()
-            ind = np.nonzero(decratenp>(1/lamb))
-            decratenp[ind] = (1/lamb)
-            param.decrate = torch.from_numpy(decratenp).type(torch.cuda.FloatTensor)
-            param.data0 = 1*param.data
-        else:
-            decratenp = param.decrate.numpy()
-            ind = np.nonzero(decratenp>(1/lamb))
-            decratenp[ind] = (1/lamb)
-            param.decrate = torch.from_numpy(decratenp).type(torch.FloatTensor)
-            param.data0 = 1*param.data
+    for param in dyneval_params:
+        try:
+            if args.cuda:
+                decratenp = param.decrate.cpu().numpy()
+                ind = np.nonzero(decratenp>(1/lamb))
+                decratenp[ind] = (1/lamb)
+                param.decrate = torch.from_numpy(decratenp).type(torch.cuda.FloatTensor)
+                param.data0 = 1*param.data
+            else:
+                decratenp = param.decrate.numpy()
+                ind = np.nonzero(decratenp>(1/lamb))
+                decratenp[ind] = (1/lamb)
+                param.decrate = torch.from_numpy(decratenp).type(torch.FloatTensor)
+                param.data0 = 1*param.data
+        except AttributeError:
+            pass
 
     total_loss = 0
 
@@ -176,16 +182,19 @@ def evaluate():
         model.zero_grad()
 
         #assumes model has atleast 2 returns, and first is output and second is hidden
-        log_prob, hidden = model(data, hidden)
+        log_prob, hidden = model(data, hidden, detach=False)
         loss = nn.functional.nll_loss(log_prob.view(-1, log_prob.size(2)), targets)
 
         #compute gradient on sequence segment loss
         loss.backward()
 
         #update rule
-        for param in model.parameters():
-            dW = lamb*param.decrate*(param.data0-param.data)-lr*param.grad.data/(param.MS+epsilon)
-            param.data+=dW
+        for param in dyneval_params:
+            try:
+                dW = lamb*param.decrate*(param.data0-param.data)-lr*param.grad.data/(param.MS+epsilon)
+                param.data+=dW
+            except AttributeError:
+                pass
 
         #seq_len/seq_len0 will be 1 except for last sequence
         #for last sequence, we downweight if sequence is shorter
@@ -209,6 +218,13 @@ def evaluate():
 #load model
 with open(model_name, 'rb') as f:
     model = torch.load(f)
+
+# 50.5481 vs 49.3571
+dyneval_params = []
+dyneval_params.extend(model.latent.parameters())
+dyneval_params.extend(model.decoder.parameters())
+dyneval_params.extend(model.prior.parameters())
+dyneval_params = list(model.parameters())
 
 ntokens = len(corpus.dictionary)
 criterion = nn.CrossEntropyLoss()
